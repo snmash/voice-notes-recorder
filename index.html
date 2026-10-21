@@ -129,11 +129,11 @@ async function startRec(){
  rec.ondataavailable=e=>{if(e.data&&e.data.size){const n=seq++;pend=pend.then(()=>putChunk(D,cur.id,n,e.data)).catch(err=>log("DISK WRITE FAILED: "+err))}};
  rec._flush=()=>pend;
  rec.onerror=e=>log("Recorder error: "+(e.error&&e.error.message));
- stream.getAudioTracks()[0].onended=()=>log("Mic track ended (call, Siri or lock?). Tap Stop and send to keep what was captured.");
+ stream.getAudioTracks()[0].onended=()=>log("Mic track ended (call, Siri or lock?). Tap Stop recording, then pick a category and Send to keep what was saved (it may be incomplete or unplayable).");
  rec.start(10000);t0=Date.now();
  document.addEventListener("visibilitychange",reacq);await takeLock();
  tick=setInterval(()=>{const s=Math.floor((Date.now()-t0)/1000);$("t").textContent=Math.floor(s/60)+":"+String(s%60).padStart(2,"0")},500);
- $("go").textContent="Stop and send";$("go").className="stop";log("Recording. Keep this page open and the screen on. Pick the category after Stop.")}
+ $("go").textContent="Stop recording";$("go").className="stop";log("Recording. Keep this page open and the screen on. Pick the category after Stop.")}
 function wkSet(txt,ok){const e=$("wk");e.textContent=txt;e.style.color=ok?"#6f6":"#fb6"}
 async function takeLock(){
  if(!(navigator.wakeLock&&navigator.wakeLock.request)){wkSet("Keep-awake NOT available on this browser. Keep the screen on and unlocked.",false);return}
@@ -143,7 +143,7 @@ async function takeLock(){
 async function reacq(){
  if(!(rec&&rec.state!=="inactive"))return;
  if(document.visibilityState==="hidden"){log("Screen/page left at "+new Date().toLocaleTimeString()+". Recording may have paused; chunks are saved every 10 s.");return}
- log("Back at "+new Date().toLocaleTimeString()+". Recorder state: "+rec.state+(rec.state!=="recording"?" (recording was interrupted, tap Stop and send)":""));
+ log("Back at "+new Date().toLocaleTimeString()+". Recorder state: "+rec.state+(rec.state!=="recording"?" (recording was interrupted, tap Stop recording, then Send; audio may be incomplete)":""));
  if(rec.state==="recording")await takeLock()}
 async function stopRec(){
  const tp=getToken().catch(()=>null);            /* refresh token inside the tap gesture */
