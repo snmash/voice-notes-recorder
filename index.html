@@ -13,6 +13,7 @@ button{background:#2a7;color:#fff}button.stop{background:#c33}button.alt{backgro
 <div id="setup" hidden>This page has no setup yet. Open your private setup link once.</div>
 <div id="main" hidden>
 <div id="t">0:00</div>
+<div id="wk" style="text-align:center;font-size:15px;min-height:22px;margin-bottom:6px"></div>
 <button id="go">Record</button>
 <div id="rec"></div>
 <div id="s"></div>
@@ -130,15 +131,25 @@ async function startRec(){
  rec.onerror=e=>log("Recorder error: "+(e.error&&e.error.message));
  stream.getAudioTracks()[0].onended=()=>log("Mic track ended (call, Siri or lock?). Tap Stop and send to keep what was captured.");
  rec.start(10000);t0=Date.now();
- try{wl=await navigator.wakeLock.request("screen");document.addEventListener("visibilitychange",reacq)}catch(e){log("Wake lock unavailable: keep the screen on manually.")}
+ document.addEventListener("visibilitychange",reacq);await takeLock();
  tick=setInterval(()=>{const s=Math.floor((Date.now()-t0)/1000);$("t").textContent=Math.floor(s/60)+":"+String(s%60).padStart(2,"0")},500);
  $("go").textContent="Stop and send";$("go").className="stop";log("Recording. Keep this page open and the screen on. Pick the category after Stop.")}
-async function reacq(){if(document.visibilityState==="visible"&&rec&&rec.state==="recording"){try{wl=await navigator.wakeLock.request("screen")}catch(e){}}}
+function wkSet(txt,ok){const e=$("wk");e.textContent=txt;e.style.color=ok?"#6f6":"#fb6"}
+async function takeLock(){
+ if(!(navigator.wakeLock&&navigator.wakeLock.request)){wkSet("Keep-awake NOT available on this browser. Keep the screen on and unlocked.",false);return}
+ try{wl=await navigator.wakeLock.request("screen");wkSet("Keep-awake ON (screen should stay on)",true);
+  wl.addEventListener("release",()=>{if(rec&&rec.state==="recording"){wkSet("Keep-awake OFF. Keep the screen on and unlocked.",false)}})}
+ catch(e){wkSet("Keep-awake FAILED ("+(e.name||"error")+"). Keep the screen on and unlocked.",false)}}
+async function reacq(){
+ if(!(rec&&rec.state!=="inactive"))return;
+ if(document.visibilityState==="hidden"){log("Screen/page left at "+new Date().toLocaleTimeString()+". Recording may have paused; chunks are saved every 10 s.");return}
+ log("Back at "+new Date().toLocaleTimeString()+". Recorder state: "+rec.state+(rec.state!=="recording"?" (recording was interrupted, tap Stop and send)":""));
+ if(rec.state==="recording")await takeLock()}
 async function stopRec(){
  const tp=getToken().catch(()=>null);            /* refresh token inside the tap gesture */
  clearInterval(tick);document.removeEventListener("visibilitychange",reacq);
  await new Promise(r=>{rec.onstop=r;rec.state!=="inactive"?rec.stop():r()});
- await rec._flush();stream.getTracks().forEach(t=>t.stop());try{wl&&wl.release()}catch(e){}
+ await rec._flush();stream.getTracks().forEach(t=>t.stop());try{wl&&wl.release()}catch(e){}wkSet("",true);
  cur.state="stopped";cur.ended=Date.now();await putSession(D,cur);
  $("go").textContent="Record";$("go").className="";$("t").textContent="0:00";
  cur=null;rec=null;await tp;
