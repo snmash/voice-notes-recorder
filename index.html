@@ -87,11 +87,10 @@ async function notify(f,cat,rootId){
  }catch(e){log("Notice not created (upload is fine): "+e.message)}}
 async function loadHistory(){
  try{const q=encodeURIComponent("mimeType contains 'audio/' and trashed=false");
-  const j=await (await api("https://www.googleapis.com/drive/v3/files?q="+q+"&orderBy=createdTime desc&pageSize=15&fields=files(id,name,webViewLink,createdTime)")).json();
+  const j=await (await api("https://www.googleapis.com/drive/v3/files?q="+q+"&orderBy=createdTime desc&pageSize=15&fields=files(id,name,webViewLink,createdTime,description)")).json();
   const h=$("hist");h.textContent="";
   for(const f of j.files){const d=document.createElement("div");const a=document.createElement("a");a.href=f.webViewLink;a.target="_blank";a.textContent=f.name.replace(/\.(m4a|webm|mp4)$/,"");a.style.color="#9cf";d.appendChild(a);
-   try{const c=await (await api("https://www.googleapis.com/drive/v3/files/"+f.id+"/comments?fields=comments(content)&pageSize=5")).json();
-    for(const m of (c.comments||[])){for(const u of (m.content.match(/https:\/\/\S+/g)||[])){const l=document.createElement("a");l.href=u;l.target="_blank";l.textContent=" [link]";l.style.color="#9cf";d.appendChild(l)}}}catch(e){}
+   for(const u of ((f.description||"").match(/https:\/\/\S+/g)||[])){const l=document.createElement("a");l.href=u;l.target="_blank";l.textContent=u.includes("claude.ai")?" [Claude]":" [transcript]";l.style.color="#9cf";d.appendChild(l)}
    h.appendChild(d)}
   if(!j.files.length)h.textContent="No recordings yet."}catch(e){$("hist").textContent="History unavailable: "+e.message}}
 async function sendSession(d,s){
