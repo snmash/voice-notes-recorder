@@ -12,7 +12,6 @@ button{background:#2a7;color:#fff}button.stop{background:#c33}button.alt{backgro
 <h2>Voice Notes</h2>
 <div id="setup" hidden>This page has no setup yet. Open your private setup link once.</div>
 <div id="main" hidden>
-<select id="cat"></select>
 <div id="t">0:00</div>
 <button id="go">Record</button>
 <div id="rec"></div>
@@ -31,7 +30,7 @@ try{const m=location.hash.match(/cfg=([^&]+)/);
  if(m){cfg=JSON.parse(b64d(m[1]));localStorage.setItem("vn.cfg",JSON.stringify(cfg));history.replaceState(null,"",location.pathname+location.search)}
  else cfg=JSON.parse(localStorage.getItem("vn.cfg")||"null")}catch(e){cfg=null}
 if(!cfg||!cfg.clientId||!cfg.root||!cfg.cats||!cfg.cats.length){$("setup").hidden=false}
-else{$("main").hidden=false;cfg.cats.forEach(c=>{const o=document.createElement("option");o.textContent=c;$("cat").appendChild(o)})}
+else{$("main").hidden=false}
 
 /* ---- IndexedDB: chunks are written to disk as they arrive, so a crash/reload loses at most ~10 s ---- */
 const DBN="vn-recorder";
@@ -88,17 +87,21 @@ async function sendSession(d,s){
 /* ---- recording ---- */
 let D,rec,stream,wl,t0,tick,cur,seq=0,busy=false;
 function pickMime(){for(const m of ["audio/mp4","audio/webm;codecs=opus","audio/webm"])if(window.MediaRecorder&&MediaRecorder.isTypeSupported(m))return m;return""}
-async function refreshRecovered(){const ss=(await allSessions(D)).filter(s=>s.state!=="recording"||s.id!==(cur&&cur.id));
+async function refreshRecovered(){const ss=(await allSessions(D)).filter(s=>!(cur&&s.id===cur.id));
  const box=$("rec");box.textContent="";
- for(const s of ss){const b=document.createElement("button");b.className="alt";
-  b.textContent="Send saved recording ("+s.cat+", "+new Date(s.started).toLocaleString()+")";
-  b.onclick=async()=>{b.disabled=true;try{await sendSession(D,s)}catch(e){log("Send failed: "+e.message+". Recording kept on this phone.")}refreshRecovered()};
-  box.appendChild(b)}}
+ for(const s of ss){const row=document.createElement("div");row.style.cssText="border:1px solid #444;border-radius:12px;padding:10px;margin:8px 0";
+  const lab=document.createElement("div");lab.textContent="Saved recording, "+new Date(s.started).toLocaleString()+(s.ended?" ("+Math.round((s.ended-s.started)/60000)+" min)":" (interrupted)");lab.style.fontSize="14px";
+  const sel=document.createElement("select");const ph=document.createElement("option");ph.value="";ph.textContent="Choose category...";sel.appendChild(ph);
+  cfg.cats.forEach(c=>{const o=document.createElement("option");o.textContent=c;sel.appendChild(o)});sel.value=s.cat||"";
+  const b=document.createElement("button");b.textContent="Send to Drive";
+  b.onclick=async()=>{if(!sel.value)return log("Choose a category first.");b.disabled=true;sel.disabled=true;s.cat=sel.value;await putSession(D,s);
+   try{await sendSession(D,s)}catch(e){log("Send failed: "+e.message+". Recording kept on this phone.")}refreshRecovered()};
+  row.append(lab,sel,b);box.appendChild(row)}}
 async function startRec(){
  try{await getToken()}catch(e){return log("Sign-in needed first: "+e.message)}
  try{stream=await navigator.mediaDevices.getUserMedia({audio:true})}catch(e){return log("Mic blocked: "+e.message)}
  const mime=pickMime();rec=new MediaRecorder(stream,mime?{mimeType:mime}:{});
- cur={id:"s"+Date.now(),cat:$("cat").value,mime:rec.mimeType||mime,started:Date.now(),state:"recording",
+ cur={id:"s"+Date.now(),cat:null,mime:rec.mimeType||mime,started:Date.now(),state:"recording",
   name:new Date().toISOString().replace(/[:.]/g,"-")+"."+((rec.mimeType||mime).includes("mp4")?"m4a":"webm")};
  seq=0;await putSession(D,cur);
  let pend=Promise.resolve();
@@ -109,7 +112,7 @@ async function startRec(){
  rec.start(10000);t0=Date.now();
  try{wl=await navigator.wakeLock.request("screen");document.addEventListener("visibilitychange",reacq)}catch(e){log("Wake lock unavailable: keep the screen on manually.")}
  tick=setInterval(()=>{const s=Math.floor((Date.now()-t0)/1000);$("t").textContent=Math.floor(s/60)+":"+String(s%60).padStart(2,"0")},500);
- $("go").textContent="Stop and send";$("go").className="stop";$("cat").disabled=true;log("Recording to "+cur.cat+". Keep this page open and the screen on.")}
+ $("go").textContent="Stop and send";$("go").className="stop";log("Recording. Keep this page open and the screen on. Pick the category after Stop.")}
 async function reacq(){if(document.visibilityState==="visible"&&rec&&rec.state==="recording"){try{wl=await navigator.wakeLock.request("screen")}catch(e){}}}
 async function stopRec(){
  const tp=getToken().catch(()=>null);            /* refresh token inside the tap gesture */
@@ -117,10 +120,9 @@ async function stopRec(){
  await new Promise(r=>{rec.onstop=r;rec.state!=="inactive"?rec.stop():r()});
  await rec._flush();stream.getTracks().forEach(t=>t.stop());try{wl&&wl.release()}catch(e){}
  cur.state="stopped";cur.ended=Date.now();await putSession(D,cur);
- $("go").textContent="Record";$("go").className="";$("cat").disabled=false;$("t").textContent="0:00";
- const s=cur;cur=null;rec=null;await tp;
- try{await sendSession(D,s)}catch(e){log("UPLOAD FAILED: "+e.message+"\nSaved on this phone. Use the Send saved recording button.")}
- refreshRecovered()}
+ $("go").textContent="Record";$("go").className="";$("t").textContent="0:00";
+ cur=null;rec=null;await tp;
+ log("Stopped. Saved on this phone. Choose a category below and tap Send.");refreshRecovered()}
 if(cfg&&cfg.clientId){db().then(d=>{D=d;refreshRecovered();
  $("go").onclick=async()=>{if(busy)return;busy=true;try{rec&&rec.state!=="inactive"?await stopRec():await startRec()}finally{busy=false}}});
  window.addEventListener("beforeunload",e=>{if(rec&&rec.state==="recording"){e.preventDefault();e.returnValue=""}})}
