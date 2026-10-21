@@ -1,0 +1,127 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Voice Notes</title>
+<style>
+body{font-family:-apple-system,sans-serif;margin:0;padding:20px;background:#111;color:#eee}
+select,button{font-size:20px;padding:14px;width:100%;margin:8px 0;border-radius:12px;border:0;box-sizing:border-box}
+button{background:#2a7;color:#fff}button.stop{background:#c33}button.alt{background:#555}
+#t{font-size:56px;text-align:center;font-variant-numeric:tabular-nums}
+#s{font-size:14px;color:#9c9;min-height:80px;white-space:pre-wrap}#rec{margin-top:14px}
+</style></head><body>
+<h2>Voice Notes</h2>
+<div id="setup" hidden>This page has no setup yet. Open your private setup link once.</div>
+<div id="main" hidden>
+<select id="cat"></select>
+<div id="t">0:00</div>
+<button id="go">Record</button>
+<div id="rec"></div>
+<div id="s"></div>
+</div>
+<script>
+"use strict";
+/* Generic code. No project names, folder ids or secrets live here.
+   Private config arrives once via the URL fragment (#cfg=base64url JSON, never sent to a server) and is kept in localStorage:
+   {clientId, root, cats:[...]} */
+const $=id=>document.getElementById(id);
+const logs=[];function log(m){logs.unshift(new Date().toLocaleTimeString()+" "+m);logs.length=8;$("s").textContent=logs.join("\n")}
+function b64d(s){s=s.replace(/-/g,"+").replace(/_/g,"/");return decodeURIComponent(escape(atob(s)))}
+let cfg=null;
+try{const m=location.hash.match(/cfg=([^&]+)/);
+ if(m){cfg=JSON.parse(b64d(m[1]));localStorage.setItem("vn.cfg",JSON.stringify(cfg));history.replaceState(null,"",location.pathname+location.search)}
+ else cfg=JSON.parse(localStorage.getItem("vn.cfg")||"null")}catch(e){cfg=null}
+if(!cfg||!cfg.clientId||!cfg.root||!cfg.cats||!cfg.cats.length){$("setup").hidden=false}
+else{$("main").hidden=false;cfg.cats.forEach(c=>{const o=document.createElement("option");o.textContent=c;$("cat").appendChild(o)})}
+
+/* ---- IndexedDB: chunks are written to disk as they arrive, so a crash/reload loses at most ~10 s ---- */
+const DBN="vn-recorder";
+function db(){return new Promise((res,rej)=>{const r=indexedDB.open(DBN,1);
+ r.onupgradeneeded=()=>{const d=r.result;d.createObjectStore("sessions",{keyPath:"id"});const c=d.createObjectStore("chunks",{keyPath:["id","n"]})};
+ r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
+const tx=(d,st,mode,fn)=>new Promise((res,rej)=>{const t=d.transaction(st,mode);const out=fn(t);t.oncomplete=()=>res(out&&out.result!==undefined?out.result:undefined);t.onerror=()=>rej(t.error);t.onabort=()=>rej(t.error)});
+const putSession=(d,s)=>tx(d,"sessions","readwrite",t=>t.objectStore("sessions").put(s));
+const putChunk=(d,id,n,blob)=>tx(d,"chunks","readwrite",t=>t.objectStore("chunks").put({id,n,blob}));
+const allSessions=d=>tx(d,"sessions","readonly",t=>t.objectStore("sessions").getAll());
+async function loadBlob(d,s){const range=IDBKeyRange.bound([s.id,0],[s.id,Infinity]);
+ const rows=await tx(d,"chunks","readonly",t=>t.objectStore("chunks").getAll(range));
+ return new Blob(rows.map(r=>r.blob),{type:s.mime})}
+async function dropSession(d,s){const range=IDBKeyRange.bound([s.id,0],[s.id,Infinity]);
+ await tx(d,"chunks","readwrite",t=>t.objectStore("chunks").delete(range));
+ await tx(d,"sessions","readwrite",t=>t.objectStore("sessions").delete(s.id))}
+
+/* ---- Google sign-in (GIS token flow, drive.file only) ---- */
+let token=null,tokenExp=0,tokClient=null;
+function getToken(){return new Promise((res,rej)=>{
+ if(token&&Date.now()<tokenExp-120000)return res(token);
+ if(!window.google||!google.accounts)return rej(new Error("Google sign-in script not loaded (offline?)"));
+ tokClient=tokClient||google.accounts.oauth2.initTokenClient({client_id:cfg.clientId,scope:"https://www.googleapis.com/auth/drive.file",
+  callback:r=>{if(r.error)return tokClient._rej(new Error(r.error));token=r.access_token;tokenExp=Date.now()+r.expires_in*1000;tokClient._res(token)},
+  error_callback:e=>tokClient._rej(new Error(e.type||"auth error"))});
+ tokClient._res=res;tokClient._rej=rej;tokClient.requestAccessToken({prompt:""})})}
+async function api(url,opt){opt=opt||{};const t=await getToken();opt.headers=Object.assign({Authorization:"Bearer "+t},opt.headers||{});
+ const r=await fetch(url,opt);if(!r.ok)throw new Error("Drive "+r.status+" "+(await r.text()).slice(0,200));return r}
+const FOLDER="application/vnd.google-apps.folder";
+async function ensureFolder(name,parent){
+ const esc=name.replace(/\\/g,"\\\\").replace(/'/g,"\\'");
+ const q=encodeURIComponent("name='"+esc+"' and mimeType='"+FOLDER+"' and trashed=false"+(parent?" and '"+parent+"' in parents":""));
+ const j=await (await api("https://www.googleapis.com/drive/v3/files?q="+q+"&fields=files(id)&spaces=drive")).json();
+ if(j.files.length)return j.files[0].id;
+ const body={name,mimeType:FOLDER};if(parent)body.parents=[parent];
+ return (await (await api("https://www.googleapis.com/drive/v3/files?fields=id",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json()).id}
+async function upload(blob,name,parent){
+ const init=await api("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,size,name",{method:"POST",
+  headers:{"Content-Type":"application/json; charset=UTF-8","X-Upload-Content-Type":blob.type||"audio/mp4"},body:JSON.stringify({name,parents:[parent]})});
+ const r=await api(init.headers.get("Location"),{method:"PUT",headers:{"Content-Type":blob.type||"audio/mp4"},body:blob});
+ const f=await r.json();
+ if(Number(f.size)!==blob.size)throw new Error("size mismatch: sent "+blob.size+" drive "+f.size);
+ return f}
+async function sendSession(d,s){
+ const blob=await loadBlob(d,s);
+ if(blob.size===0)throw new Error("recording is empty");
+ log("Uploading "+(blob.size/1e6).toFixed(1)+" MB to "+s.cat+"...");
+ const rootId=await ensureFolder(cfg.root,null);const catId=await ensureFolder(s.cat,rootId);
+ const f=await upload(blob,s.name,catId);
+ s.state="uploaded";s.driveId=f.id;await putSession(d,s);
+ await dropSession(d,s);   /* local copy removed only after Drive reports the exact byte size */
+ log("Uploaded and size-verified in Drive ("+s.cat+"). Local copy removed.")}
+
+/* ---- recording ---- */
+let D,rec,stream,wl,t0,tick,cur,seq=0,busy=false;
+function pickMime(){for(const m of ["audio/mp4","audio/webm;codecs=opus","audio/webm"])if(window.MediaRecorder&&MediaRecorder.isTypeSupported(m))return m;return""}
+async function refreshRecovered(){const ss=(await allSessions(D)).filter(s=>s.state!=="recording"||s.id!==(cur&&cur.id));
+ const box=$("rec");box.textContent="";
+ for(const s of ss){const b=document.createElement("button");b.className="alt";
+  b.textContent="Send saved recording ("+s.cat+", "+new Date(s.started).toLocaleString()+")";
+  b.onclick=async()=>{b.disabled=true;try{await sendSession(D,s)}catch(e){log("Send failed: "+e.message+". Recording kept on this phone.")}refreshRecovered()};
+  box.appendChild(b)}}
+async function startRec(){
+ try{await getToken()}catch(e){return log("Sign-in needed first: "+e.message)}
+ try{stream=await navigator.mediaDevices.getUserMedia({audio:true})}catch(e){return log("Mic blocked: "+e.message)}
+ const mime=pickMime();rec=new MediaRecorder(stream,mime?{mimeType:mime}:{});
+ cur={id:"s"+Date.now(),cat:$("cat").value,mime:rec.mimeType||mime,started:Date.now(),state:"recording",
+  name:new Date().toISOString().replace(/[:.]/g,"-")+"."+((rec.mimeType||mime).includes("mp4")?"m4a":"webm")};
+ seq=0;await putSession(D,cur);
+ let pend=Promise.resolve();
+ rec.ondataavailable=e=>{if(e.data&&e.data.size){const n=seq++;pend=pend.then(()=>putChunk(D,cur.id,n,e.data)).catch(err=>log("DISK WRITE FAILED: "+err))}};
+ rec._flush=()=>pend;
+ rec.onerror=e=>log("Recorder error: "+(e.error&&e.error.message));
+ stream.getAudioTracks()[0].onended=()=>log("Mic track ended (call, Siri or lock?). Tap Stop and send to keep what was captured.");
+ rec.start(10000);t0=Date.now();
+ try{wl=await navigator.wakeLock.request("screen");document.addEventListener("visibilitychange",reacq)}catch(e){log("Wake lock unavailable: keep the screen on manually.")}
+ tick=setInterval(()=>{const s=Math.floor((Date.now()-t0)/1000);$("t").textContent=Math.floor(s/60)+":"+String(s%60).padStart(2,"0")},500);
+ $("go").textContent="Stop and send";$("go").className="stop";$("cat").disabled=true;log("Recording to "+cur.cat+". Keep this page open and the screen on.")}
+async function reacq(){if(document.visibilityState==="visible"&&rec&&rec.state==="recording"){try{wl=await navigator.wakeLock.request("screen")}catch(e){}}}
+async function stopRec(){
+ const tp=getToken().catch(()=>null);            /* refresh token inside the tap gesture */
+ clearInterval(tick);document.removeEventListener("visibilitychange",reacq);
+ await new Promise(r=>{rec.onstop=r;rec.state!=="inactive"?rec.stop():r()});
+ await rec._flush();stream.getTracks().forEach(t=>t.stop());try{wl&&wl.release()}catch(e){}
+ cur.state="stopped";cur.ended=Date.now();await putSession(D,cur);
+ $("go").textContent="Record";$("go").className="";$("cat").disabled=false;$("t").textContent="0:00";
+ const s=cur;cur=null;rec=null;await tp;
+ try{await sendSession(D,s)}catch(e){log("UPLOAD FAILED: "+e.message+"\nSaved on this phone. Use the Send saved recording button.")}
+ refreshRecovered()}
+if(cfg&&cfg.clientId){db().then(d=>{D=d;refreshRecovered();
+ $("go").onclick=async()=>{if(busy)return;busy=true;try{rec&&rec.state!=="inactive"?await stopRec():await startRec()}finally{busy=false}}});
+ window.addEventListener("beforeunload",e=>{if(rec&&rec.state==="recording"){e.preventDefault();e.returnValue=""}})}
+</script><script src="https://accounts.google.com/gsi/client" async></script></body></html>
