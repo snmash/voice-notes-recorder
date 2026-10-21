@@ -10,7 +10,9 @@ button{background:#2a7;color:#fff}button.stop{background:#c33}button.alt{backgro
 #s{font-size:14px;color:#9c9;min-height:80px;white-space:pre-wrap}#rec{margin-top:14px}
 </style></head><body>
 <h2>Voice Notes</h2>
-<div id="setup" hidden>This page has no setup yet. Open your private setup link once.</div>
+<div id="setup" hidden>This page has no setup yet. Paste your private setup link here once, then tap Save setup.
+<textarea id="pc" rows="4" style="width:100%;box-sizing:border-box;margin:10px 0;font-size:16px;border-radius:10px;padding:10px" placeholder="Paste setup link"></textarea>
+<button id="ps" style="background:#2a8;color:#fff">Save setup</button><div id="pe" style="color:#fb6;font-size:15px"></div></div>
 <div id="main" hidden>
 <div id="t">0:00</div>
 <div id="wk" style="text-align:center;font-size:15px;min-height:22px;margin-bottom:6px"></div>
@@ -29,9 +31,12 @@ const logs=[];function log(m){logs.unshift(new Date().toLocaleTimeString()+" "+m
 function b64d(s){s=s.replace(/-/g,"+").replace(/_/g,"/");return decodeURIComponent(escape(atob(s)))}
 let cfg=null;
 try{const m=location.hash.match(/cfg=([^&]+)/);
- if(m){cfg=JSON.parse(b64d(m[1]));localStorage.setItem("vn.cfg",JSON.stringify(cfg));history.replaceState(null,"",location.pathname+location.search)}
+ if(m){cfg=JSON.parse(b64d(m[1]));localStorage.setItem("vn.cfg",JSON.stringify(cfg))}
  else cfg=JSON.parse(localStorage.getItem("vn.cfg")||"null")}catch(e){cfg=null}
-if(!cfg||!cfg.clientId||!cfg.root||!cfg.cats||!cfg.cats.length){$("setup").hidden=false}
+if(!cfg||!cfg.clientId||!cfg.root||!cfg.cats||!cfg.cats.length){$("setup").hidden=false;
+ $("ps").onclick=()=>{try{const m=$("pc").value.match(/cfg=([^&\s]+)/);if(!m)throw new Error("no setup code found in what you pasted");
+  const c=JSON.parse(b64d(m[1]));if(!c.clientId||!c.root||!c.cats||!c.cats.length)throw new Error("setup code incomplete");
+  localStorage.setItem("vn.cfg",JSON.stringify(c));location.hash="cfg="+m[1];location.reload()}catch(e){$("pe").textContent="Could not save: "+e.message}}}
 else{$("main").hidden=false}
 
 /* ---- IndexedDB: chunks are written to disk as they arrive, so a crash/reload loses at most ~10 s ---- */
