@@ -16,6 +16,7 @@ button{background:#2a7;color:#fff}button.stop{background:#c33}button.alt{backgro
 <button id="go">Record</button>
 <div id="rec"></div>
 <div id="s"></div>
+<button id="hb">Show past recordings</button><div id="hist" style="font-size:15px;line-height:1.9"></div>
 </div>
 <script>
 "use strict";
@@ -74,6 +75,25 @@ async function upload(blob,name,parent){
  const f=await r.json();
  if(Number(f.size)!==blob.size)throw new Error("size mismatch: sent "+blob.size+" drive "+f.size);
  return f}
+async function notify(f,cat,rootId){
+ try{const nm="VN-notice "+f.id+" "+cat;
+  const q=encodeURIComponent("name='"+nm+"' and trashed=false");
+  const ex=await (await api("https://www.googleapis.com/drive/v3/files?q="+q+"&fields=files(id)")).json();
+  if(ex.files.length)return;
+  const b="vnb"+Date.now();
+  const body="--"+b+"\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"+JSON.stringify({name:nm,mimeType:"application/vnd.google-apps.document",parents:[rootId]})+"\r\n--"+b+"\r\nContent-Type: text/plain\r\n\r\nupload confirmed "+f.id+"\r\n--"+b+"--";
+  await api("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id",{method:"POST",headers:{"Content-Type":"multipart/related; boundary="+b},body});
+  log("Notice doc created "+new Date().toLocaleTimeString()+" (processing still waits for my check)");
+ }catch(e){log("Notice not created (upload is fine): "+e.message)}}
+async function loadHistory(){
+ try{const q=encodeURIComponent("mimeType contains 'audio/' and trashed=false");
+  const j=await (await api("https://www.googleapis.com/drive/v3/files?q="+q+"&orderBy=createdTime desc&pageSize=15&fields=files(id,name,webViewLink,createdTime)")).json();
+  const h=$("hist");h.textContent="";
+  for(const f of j.files){const d=document.createElement("div");const a=document.createElement("a");a.href=f.webViewLink;a.target="_blank";a.textContent=f.name.replace(/\.(m4a|webm|mp4)$/,"");a.style.color="#9cf";d.appendChild(a);
+   try{const c=await (await api("https://www.googleapis.com/drive/v3/files/"+f.id+"/comments?fields=comments(content)&pageSize=5")).json();
+    for(const m of (c.comments||[])){for(const u of (m.content.match(/https:\/\/\S+/g)||[])){const l=document.createElement("a");l.href=u;l.target="_blank";l.textContent=" [link]";l.style.color="#9cf";d.appendChild(l)}}}catch(e){}
+   h.appendChild(d)}
+  if(!j.files.length)h.textContent="No recordings yet."}catch(e){$("hist").textContent="History unavailable: "+e.message}}
 async function sendSession(d,s){
  const blob=await loadBlob(d,s);
  if(blob.size===0)throw new Error("recording is empty");
@@ -81,8 +101,9 @@ async function sendSession(d,s){
  const rootId=await ensureFolder(cfg.root,null);const catId=await ensureFolder(s.cat,rootId);
  const f=await upload(blob,s.name,catId);
  s.state="uploaded";s.driveId=f.id;await putSession(d,s);
+ await notify(f,s.cat,rootId);
  await dropSession(d,s);   /* local copy removed only after Drive reports the exact byte size */
- log("Uploaded and size-verified in Drive ("+s.cat+"). Local copy removed.")}
+ log("Uploaded and size-verified in Drive ("+s.cat+"). Local copy removed.");loadHistory()}
 
 /* ---- recording ---- */
 let D,rec,stream,wl,t0,tick,cur,seq=0,busy=false;
@@ -123,7 +144,7 @@ async function stopRec(){
  $("go").textContent="Record";$("go").className="";$("t").textContent="0:00";
  cur=null;rec=null;await tp;
  log("Stopped. Saved on this phone. Choose a category below and tap Send.");refreshRecovered()}
-if(cfg&&cfg.clientId){db().then(d=>{D=d;refreshRecovered();
+if(cfg&&cfg.clientId){$("hb").onclick=loadHistory;db().then(d=>{D=d;refreshRecovered();
  $("go").onclick=async()=>{if(busy)return;busy=true;try{rec&&rec.state!=="inactive"?await stopRec():await startRec()}finally{busy=false}}});
  window.addEventListener("beforeunload",e=>{if(rec&&rec.state==="recording"){e.preventDefault();e.returnValue=""}})}
 </script><script src="https://accounts.google.com/gsi/client" async></script></body></html>
